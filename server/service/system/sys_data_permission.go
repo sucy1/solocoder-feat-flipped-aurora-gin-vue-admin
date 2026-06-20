@@ -2,6 +2,8 @@ package system
 
 import (
 	"context"
+	"errors"
+	"regexp"
 	"strings"
 
 	"github.com/flipped-aurora/gin-vue-admin/server/global"
@@ -21,11 +23,75 @@ var levelStrictness = map[string]int{
 	"custom": 1,
 }
 
+var dangerousSQLPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bunion\b`),
+	regexp.MustCompile(`(?i)\bdrop\b`),
+	regexp.MustCompile(`(?i)\bdelete\b`),
+	regexp.MustCompile(`(?i)\bupdate\b`),
+	regexp.MustCompile(`(?i)\binsert\b`),
+	regexp.MustCompile(`(?i)\balter\b`),
+	regexp.MustCompile(`(?i)\btruncate\b`),
+	regexp.MustCompile(`(?i)\binformation_schema\b`),
+	regexp.MustCompile(`(?i)\bsysdatabases\b`),
+	regexp.MustCompile(`(?i)\bmssql\b`),
+	regexp.MustCompile(`(?i);`),
+	regexp.MustCompile(`--`),
+	regexp.MustCompile(`/\*`),
+	regexp.MustCompile(`\*/`),
+	regexp.MustCompile(`xp_`),
+	regexp.MustCompile(`(?i)\bexec\b`),
+	regexp.MustCompile(`(?i)\bexecute\b`),
+	regexp.MustCompile(`(?i)\bcreate\b`),
+}
+
+var allowedSQLFunctions = map[string]bool{
+	"where": true, "and": true, "or": true, "not": true,
+	"in": true, "like": true, "between": true, "is": true, "null": true,
+	"select": true, "from": true, "exists": true, "case": true, "when": true,
+	"then": true, "end": true, "as": true, "on": true,
+	"=": true, "!=": true, ">": true, "<": true, ">=": true, "<=": true,
+	"<>": true,
+}
+
+func validateCustomSQL(sql string) error {
+	trimmed := strings.TrimSpace(sql)
+	if trimmed == "" {
+		return nil
+	}
+	for _, pattern := range dangerousSQLPatterns {
+		if pattern.MatchString(trimmed) {
+			return errors.New("custom SQL contains dangerous patterns")
+		}
+	}
+	parenDepth := 0
+	for _, ch := range trimmed {
+		switch ch {
+		case '(':
+			parenDepth++
+		case ')':
+			parenDepth--
+			if parenDepth < 0 {
+				return errors.New("custom SQL has unbalanced parentheses")
+			}
+		}
+	}
+	if parenDepth != 0 {
+		return errors.New("custom SQL has unbalanced parentheses")
+	}
+	return nil
+}
+
 func (d *DataPermissionService) CreateDataPermission(ctx context.Context, dp system.SysDataPermission) error {
+	if err := validateCustomSQL(dp.CustomSQL); err != nil {
+		return err
+	}
 	return global.GVA_DB.Create(&dp).Error
 }
 
 func (d *DataPermissionService) UpdateDataPermission(ctx context.Context, dp system.SysDataPermission) error {
+	if err := validateCustomSQL(dp.CustomSQL); err != nil {
+		return err
+	}
 	return global.GVA_DB.Model(&system.SysDataPermission{}).Where("id = ?", dp.ID).Updates(&dp).Error
 }
 
@@ -85,14 +151,18 @@ func (d *DataPermissionService) ApplyDataPermission(db *gorm.DB, userId uint, au
 	case "user":
 		return db.Where("user_id = ?", userId)
 	case "dept":
-		return db.Where("user_id IN (SELECT id FROM sys_users WHERE authority_id IN (?))", authorityIds).Or("user_id = ?", userId)
+		return db.Where("user_id IN (SELECT id FROM sys_users WHERE authority_id IN (?)) OR user_id = ?", authorityIds, userId)
 	case "role":
 		return db.Where("user_id IN (SELECT id FROM sys_users WHERE authority_id IN (?))", authorityIds)
 	case "custom":
-		if strings.TrimSpace(customSQL) != "" {
-			return db.Where(customSQL)
+		trimmed := strings.TrimSpace(customSQL)
+		if trimmed == "" {
+			return db
 		}
-		return db
+		if err := validateCustomSQL(trimmed); err != nil {
+			return db.Where("1 = 0")
+		}
+		return db.Where("(" + trimmed + ")")
 	default:
 		return db
 	}

@@ -100,8 +100,12 @@ func OperLog() gin.HandlerFunc {
 				c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
 			}
 		} else {
-			query := c.Request.URL.RawQuery
-			query, _ = url.QueryUnescape(query)
+			rawQuery := c.Request.URL.RawQuery
+			if rawQuery == "" {
+				c.Next()
+				return
+			}
+			query, _ := url.QueryUnescape(rawQuery)
 			split := strings.Split(query, "&")
 			m := make(map[string]string)
 			for _, v := range split {
@@ -109,6 +113,10 @@ func OperLog() gin.HandlerFunc {
 				if len(kv) == 2 {
 					m[kv[0]] = kv[1]
 				}
+			}
+			if len(m) == 0 {
+				c.Next()
+				return
 			}
 			body, _ = json.Marshal(&m)
 		}
