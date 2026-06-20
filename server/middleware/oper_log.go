@@ -99,6 +99,10 @@ func OperLog() gin.HandlerFunc {
 			} else {
 				c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
 			}
+			if len(body) == 0 {
+				c.Next()
+				return
+			}
 		} else {
 			rawQuery := c.Request.URL.RawQuery
 			if rawQuery == "" {
@@ -130,20 +134,6 @@ func OperLog() gin.HandlerFunc {
 			}
 			userId = id
 		}
-		record := system.SysOperLog{
-			Ip:     c.ClientIP(),
-			Method: c.Request.Method,
-			Path:   path,
-			Agent:  c.Request.UserAgent(),
-			Body:   "",
-			UserID: userId,
-		}
-
-		if strings.Contains(c.GetHeader("Content-Type"), "multipart/form-data") {
-			record.Body = "[文件]"
-		} else {
-			record.Body = truncateBody(maskSensitiveFields(string(body)))
-		}
 
 		writer := responseBodyWriter{
 			ResponseWriter: c.Writer,
@@ -155,9 +145,23 @@ func OperLog() gin.HandlerFunc {
 		c.Next()
 
 		latency := time.Since(now)
-		record.ErrorMessage = c.Errors.ByType(gin.ErrorTypePrivate).String()
-		record.Status = c.Writer.Status()
-		record.Latency = latency
+
+		record := system.SysOperLog{
+			Ip:           c.ClientIP(),
+			Method:       c.Request.Method,
+			Path:         path,
+			Status:       c.Writer.Status(),
+			Latency:      latency,
+			Agent:        c.Request.UserAgent(),
+			ErrorMessage: c.Errors.ByType(gin.ErrorTypePrivate).String(),
+			UserID:       userId,
+		}
+
+		if strings.Contains(c.GetHeader("Content-Type"), "multipart/form-data") {
+			record.Body = "[文件]"
+		} else {
+			record.Body = truncateBody(maskSensitiveFields(string(body)))
+		}
 		record.Resp = truncateBody(writer.body.String())
 
 		select {

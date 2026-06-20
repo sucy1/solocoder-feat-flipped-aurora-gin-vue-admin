@@ -22,9 +22,9 @@ func (d *DataPermissionApi) CreateDataPermission(c *gin.Context) {
 		return
 	}
 	dataPermission := system.SysDataPermission{
-		AuthorityID: dp.AuthorityID,
-		Level:       dp.Level,
-		CustomSQL:   dp.CustomSQL,
+		AuthorityID:      dp.AuthorityID,
+		Level:            dp.Level,
+		CustomConditions: dp.CustomConditions,
 	}
 	err = dataPermissionService.CreateDataPermission(context.Background(), dataPermission)
 	if err != nil {
@@ -43,8 +43,8 @@ func (d *DataPermissionApi) UpdateDataPermission(c *gin.Context) {
 		return
 	}
 	dataPermission := system.SysDataPermission{
-		Level:     dp.Level,
-		CustomSQL: dp.CustomSQL,
+		Level:            dp.Level,
+		CustomConditions: dp.CustomConditions,
 	}
 	dataPermission.ID = dp.ID
 	err = dataPermissionService.UpdateDataPermission(context.Background(), dataPermission)

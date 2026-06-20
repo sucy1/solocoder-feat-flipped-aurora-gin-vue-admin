@@ -40,8 +40,16 @@ func OperationRecord() gin.HandlerFunc {
 			} else {
 				c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
 			}
+			if len(body) == 0 {
+				c.Next()
+				return
+			}
 		} else {
 			query := c.Request.URL.RawQuery
+			if query == "" {
+				c.Next()
+				return
+			}
 			query, _ = url.QueryUnescape(query)
 			split := strings.Split(query, "&")
 			m := make(map[string]string)
@@ -50,6 +58,10 @@ func OperationRecord() gin.HandlerFunc {
 				if len(kv) == 2 {
 					m[kv[0]] = kv[1]
 				}
+			}
+			if len(m) == 0 {
+				c.Next()
+				return
 			}
 			body, _ = json.Marshal(&m)
 		}

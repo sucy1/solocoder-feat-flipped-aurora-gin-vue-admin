@@ -9,7 +9,6 @@ import (
 
 	"github.com/flipped-aurora/gin-vue-admin/server/global"
 	"github.com/flipped-aurora/gin-vue-admin/server/model/system"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -24,9 +23,8 @@ var (
 )
 
 const (
-	dictRefreshLockKey    = "gva:dict_cache:refresh_lock"
-	dictRefreshLockTTL    = 30 * time.Second
-	distributedLockMaxTry = 3
+	dictRefreshLockKey = "gva:dict_cache:refresh_lock"
+	dictRefreshLockTTL = 30 * time.Second
 )
 
 type cachedDict struct {
@@ -34,57 +32,87 @@ type cachedDict struct {
 	CachedAt time.Time
 }
 
-type distributedLock struct {
-	heldByRedis bool
-	heldByDB    bool
-	sessionID   string
+type distLockRow struct {
+	ID        uint   `gorm:"primarykey"`
+	LockKey   string `gorm:"column:lock_key;uniqueIndex;size:128"`
+	LockedBy  string `gorm:"column:locked_by;size:64"`
+	LockedAt  time.Time
 }
 
-func acquireDistributedLock() (*distributedLock, error) {
-	lock := &distributedLock{}
+func (distLockRow) TableName() string {
+	return "sys_distributed_lock"
+}
+
+func acquireDistributedLock() (*distLockRow, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	if global.GVA_REDIS != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
 		sessionID := time.Now().Format("20060102150405.000000000")
 		ok, err := global.GVA_REDIS.SetNX(ctx, dictRefreshLockKey, sessionID, dictRefreshLockTTL).Result()
 		if err == nil && ok {
-			lock.heldByRedis = true
-			lock.sessionID = sessionID
-			return lock, nil
+			return &distLockRow{LockKey: dictRefreshLockKey, LockedBy: sessionID}, nil
 		}
-		if err != nil && !errors.Is(err, redis.Nil) {
+	}
+
+	if global.GVA_DB != nil {
+		global.GVA_DB.WithContext(ctx).AutoMigrate(&distLockRow{})
+
+		var existing distLockRow
+		err := global.GVA_DB.WithContext(ctx).Where("lock_key = ?", dictRefreshLockKey).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			sessionID := time.Now().Format("20060102150405.000000000")
+			lockRow := distLockRow{
+				LockKey:  dictRefreshLockKey,
+				LockedBy: sessionID,
+				LockedAt: time.Now(),
+			}
+			if err := global.GVA_DB.WithContext(ctx).Create(&lockRow).Error; err != nil {
+				return nil, errors.New("distributed lock acquisition failed")
+			}
+			return &lockRow, nil
+		}
+		if err != nil {
 			return nil, err
 		}
-	}
-	if global.GVA_DB != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		var result int
-		err := global.GVA_DB.WithContext(ctx).Raw("SELECT GET_LOCK(?, ?)", dictRefreshLockKey, 5).Scan(&result).Error
-		if err == nil && result == 1 {
-			lock.heldByDB = true
-			return lock, nil
+		if time.Since(existing.LockedAt) > dictRefreshLockTTL {
+			sessionID := time.Now().Format("20060102150405.000000000")
+			result := global.GVA_DB.WithContext(ctx).
+				Model(&distLockRow{}).
+				Where("lock_key = ? AND locked_at = ?", dictRefreshLockKey, existing.LockedAt).
+				Updates(map[string]interface{}{
+					"locked_by": sessionID,
+					"locked_at": time.Now(),
+				})
+			if result.Error != nil || result.RowsAffected == 0 {
+				return nil, errors.New("distributed lock acquisition failed")
+			}
+			return &distLockRow{LockKey: dictRefreshLockKey, LockedBy: sessionID, LockedAt: time.Now()}, nil
 		}
 	}
+
 	return nil, errors.New("distributed lock acquisition failed")
 }
 
-func releaseDistributedLock(lock *distributedLock) {
+func releaseDistributedLock(lock *distLockRow) {
 	if lock == nil {
 		return
 	}
-	if lock.heldByRedis && global.GVA_REDIS != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if global.GVA_REDIS != nil {
 		val, err := global.GVA_REDIS.Get(ctx, dictRefreshLockKey).Result()
-		if err == nil && val == lock.sessionID {
+		if err == nil && val == lock.LockedBy {
 			global.GVA_REDIS.Del(ctx, dictRefreshLockKey)
+			return
 		}
 	}
-	if lock.heldByDB && global.GVA_DB != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		global.GVA_DB.WithContext(ctx).Exec("SELECT RELEASE_LOCK(?)", dictRefreshLockKey)
+
+	if global.GVA_DB != nil && lock.LockKey != "" {
+		global.GVA_DB.WithContext(ctx).
+			Where("lock_key = ? AND locked_by = ?", lock.LockKey, lock.LockedBy).
+			Delete(&distLockRow{})
 	}
 }
 
@@ -167,6 +195,15 @@ func (s *DictionaryCacheService) IsRefreshing() bool {
 		defer cancel()
 		exists, err := global.GVA_REDIS.Exists(ctx, dictRefreshLockKey).Result()
 		if err == nil && exists > 0 {
+			return true
+		}
+	}
+	if global.GVA_DB != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		var lock distLockRow
+		err := global.GVA_DB.WithContext(ctx).Where("lock_key = ?", dictRefreshLockKey).First(&lock).Error
+		if err == nil && time.Since(lock.LockedAt) <= dictRefreshLockTTL {
 			return true
 		}
 	}

@@ -2,7 +2,9 @@ package system
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -23,73 +25,98 @@ var levelStrictness = map[string]int{
 	"custom": 1,
 }
 
-var dangerousSQLPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bunion\b`),
-	regexp.MustCompile(`(?i)\bdrop\b`),
-	regexp.MustCompile(`(?i)\bdelete\b`),
-	regexp.MustCompile(`(?i)\bupdate\b`),
-	regexp.MustCompile(`(?i)\binsert\b`),
-	regexp.MustCompile(`(?i)\balter\b`),
-	regexp.MustCompile(`(?i)\btruncate\b`),
-	regexp.MustCompile(`(?i)\binformation_schema\b`),
-	regexp.MustCompile(`(?i)\bsysdatabases\b`),
-	regexp.MustCompile(`(?i)\bmssql\b`),
-	regexp.MustCompile(`(?i);`),
-	regexp.MustCompile(`--`),
-	regexp.MustCompile(`/\*`),
-	regexp.MustCompile(`\*/`),
-	regexp.MustCompile(`xp_`),
-	regexp.MustCompile(`(?i)\bexec\b`),
-	regexp.MustCompile(`(?i)\bexecute\b`),
-	regexp.MustCompile(`(?i)\bcreate\b`),
-}
-
-var allowedSQLFunctions = map[string]bool{
-	"where": true, "and": true, "or": true, "not": true,
-	"in": true, "like": true, "between": true, "is": true, "null": true,
-	"select": true, "from": true, "exists": true, "case": true, "when": true,
-	"then": true, "end": true, "as": true, "on": true,
+var allowedOps = map[string]bool{
 	"=": true, "!=": true, ">": true, "<": true, ">=": true, "<=": true,
-	"<>": true,
+	"like": true, "in": true, "not in": true,
+	"between": true, "is null": true, "is not null": true,
 }
 
-func validateCustomSQL(sql string) error {
-	trimmed := strings.TrimSpace(sql)
-	if trimmed == "" {
-		return nil
+var fieldNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+func validateCondition(cond system.ConditionItem) error {
+	if !fieldNamePattern.MatchString(cond.Field) {
+		return fmt.Errorf("invalid field name: %s", cond.Field)
 	}
-	for _, pattern := range dangerousSQLPatterns {
-		if pattern.MatchString(trimmed) {
-			return errors.New("custom SQL contains dangerous patterns")
+	if !allowedOps[cond.Op] {
+		return fmt.Errorf("unsupported operator: %s", cond.Op)
+	}
+	if cond.Op == "between" {
+		parts := strings.Split(cond.Value, ",")
+		if len(parts) != 2 {
+			return errors.New("between value must be two comma-separated values")
 		}
-	}
-	parenDepth := 0
-	for _, ch := range trimmed {
-		switch ch {
-		case '(':
-			parenDepth++
-		case ')':
-			parenDepth--
-			if parenDepth < 0 {
-				return errors.New("custom SQL has unbalanced parentheses")
-			}
-		}
-	}
-	if parenDepth != 0 {
-		return errors.New("custom SQL has unbalanced parentheses")
 	}
 	return nil
 }
 
+func validateCustomConditions(conditionsJSON string) error {
+	trimmed := strings.TrimSpace(conditionsJSON)
+	if trimmed == "" {
+		return nil
+	}
+	var conditions []system.ConditionItem
+	if err := json.Unmarshal([]byte(trimmed), &conditions); err != nil {
+		return fmt.Errorf("invalid JSON: %v", err)
+	}
+	for _, cond := range conditions {
+		if err := validateCondition(cond); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func buildConditionQuery(db *gorm.DB, conditionsJSON string) *gorm.DB {
+	trimmed := strings.TrimSpace(conditionsJSON)
+	if trimmed == "" {
+		return db
+	}
+	var conditions []system.ConditionItem
+	if err := json.Unmarshal([]byte(trimmed), &conditions); err != nil {
+		return db.Where("1 = 0")
+	}
+	for _, cond := range conditions {
+		if err := validateCondition(cond); err != nil {
+			return db.Where("1 = 0")
+		}
+		quotedField := fmt.Sprintf("`%s`", cond.Field)
+		switch cond.Op {
+		case "is null":
+			db = db.Where(fmt.Sprintf("%s IS NULL", quotedField))
+		case "is not null":
+			db = db.Where(fmt.Sprintf("%s IS NOT NULL", quotedField))
+		case "in", "not in":
+			parts := strings.Split(cond.Value, ",")
+			placeholders := make([]string, len(parts))
+			args := make([]interface{}, len(parts))
+			for i, p := range parts {
+				placeholders[i] = "?"
+				args[i] = strings.TrimSpace(p)
+			}
+			db = db.Where(fmt.Sprintf("%s %s (%s)", quotedField, strings.ToUpper(cond.Op), strings.Join(placeholders, ",")), args...)
+		case "between":
+			parts := strings.Split(cond.Value, ",")
+			if len(parts) == 2 {
+				db = db.Where(fmt.Sprintf("%s BETWEEN ? AND ?", quotedField), strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+			}
+		case "like":
+			db = db.Where(fmt.Sprintf("%s LIKE ?", quotedField), cond.Value)
+		default:
+			db = db.Where(fmt.Sprintf("%s %s ?", quotedField, cond.Op), cond.Value)
+		}
+	}
+	return db
+}
+
 func (d *DataPermissionService) CreateDataPermission(ctx context.Context, dp system.SysDataPermission) error {
-	if err := validateCustomSQL(dp.CustomSQL); err != nil {
+	if err := validateCustomConditions(dp.CustomConditions); err != nil {
 		return err
 	}
 	return global.GVA_DB.Create(&dp).Error
 }
 
 func (d *DataPermissionService) UpdateDataPermission(ctx context.Context, dp system.SysDataPermission) error {
-	if err := validateCustomSQL(dp.CustomSQL); err != nil {
+	if err := validateCustomConditions(dp.CustomConditions); err != nil {
 		return err
 	}
 	return global.GVA_DB.Model(&system.SysDataPermission{}).Where("id = ?", dp.ID).Updates(&dp).Error
@@ -135,7 +162,7 @@ func (d *DataPermissionService) ApplyDataPermission(db *gorm.DB, userId uint, au
 	}
 	strictestLevel := ""
 	strictestScore := 0
-	var customSQL string
+	var customConditions string
 	for _, perm := range permissions {
 		score, ok := levelStrictness[perm.Level]
 		if !ok {
@@ -144,7 +171,7 @@ func (d *DataPermissionService) ApplyDataPermission(db *gorm.DB, userId uint, au
 		if score > strictestScore {
 			strictestScore = score
 			strictestLevel = perm.Level
-			customSQL = perm.CustomSQL
+			customConditions = perm.CustomConditions
 		}
 	}
 	switch strictestLevel {
@@ -155,14 +182,7 @@ func (d *DataPermissionService) ApplyDataPermission(db *gorm.DB, userId uint, au
 	case "role":
 		return db.Where("user_id IN (SELECT id FROM sys_users WHERE authority_id IN (?))", authorityIds)
 	case "custom":
-		trimmed := strings.TrimSpace(customSQL)
-		if trimmed == "" {
-			return db
-		}
-		if err := validateCustomSQL(trimmed); err != nil {
-			return db.Where("1 = 0")
-		}
-		return db.Where("(" + trimmed + ")")
+		return buildConditionQuery(db, customConditions)
 	default:
 		return db
 	}
