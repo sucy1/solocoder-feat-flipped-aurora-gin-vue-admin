@@ -154,6 +154,10 @@ getDataSourceFunc()
         tooltip-effect="dark"
         :data="tableData"
         row-key="{{.PrimaryField.FieldJson}}"
+        {{- if .IsTree }}
+        :tree-props="{children: 'children', hasChildren: 'hasChildren'}"
+        default-expand-all
+        {{- end }}
         @selection-change="handleSelectionChange"
         {{- if .NeedSort}}
         @sort-change="sortChange"
@@ -169,6 +173,9 @@ getDataSourceFunc()
         {{- if .Table}}
             {{ GenerateTableColumn . }}
         {{- end }}
+        {{- end }}
+        {{- if .IsTree }}
+        <el-table-column align="left" label="树路径" prop="treePath" min-width="200" />
         {{- end }}
         <el-table-column align="left" label="操作" fixed="right" :min-width="appStore.operateMinWith">
             <template #default="scope">

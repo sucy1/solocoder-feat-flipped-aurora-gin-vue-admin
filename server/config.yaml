@@ -89,6 +89,14 @@ system:
     use-strict-auth: false
     #  禁用自动迁移数据库表结构，生产环境建议设为true，手动迁移
     disable-auto-migrate: false
+    oper-log-skip-paths:
+        - "/health"
+        - "/swagger"
+    oper-log-mask-fields:
+        - "password"
+        - "secret"
+        - "token"
+        - "Authorization"
 
 # captcha configuration
 captcha:
@@ -287,3 +295,6 @@ mcp:
     version: v1.0.0
     addr: 8889
     separate: false
+
+dictionary:
+    ttl: 1h

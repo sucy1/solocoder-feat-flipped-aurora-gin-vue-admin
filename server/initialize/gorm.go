@@ -65,6 +65,9 @@ func RegisterTables() {
 		system.SysError{},
 		system.SysApiToken{},
 		system.SysLoginLog{},
+		system.SysOperLog{},
+		system.SysDataPermission{},
+		system.SysFieldPermission{},
 
 		example.ExaFile{},
 		example.ExaCustomer{},

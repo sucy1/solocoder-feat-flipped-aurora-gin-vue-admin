@@ -39,6 +39,7 @@ type {{.StructName}} struct {
     {{- if .IsTree }}
     Children   []*{{.StructName}} `json:"children" gorm:"-"`     //子节点
     ParentID   int             `json:"parentID" gorm:"column:parent_id;comment:父节点"`
+    TreePath   string          `json:"treePath" gorm:"column:tree_path;comment:树路径;size:255"`
     {{- end }}
 {{- end }}
 }
@@ -51,24 +52,24 @@ func ({{.StructName}}) TableName() string {
 {{ end }}
 
 {{if .IsTree }}
-// GetChildren 实现TreeNode接口
 func (s *{{.StructName}}) GetChildren() []*{{.StructName}} {
     return s.Children
 }
 
-// SetChildren 实现TreeNode接口
 func (s *{{.StructName}}) SetChildren(children *{{.StructName}}) {
 	s.Children = append(s.Children, children)
 }
 
-// GetID 实现TreeNode接口
 func (s *{{.StructName}}) GetID() int {
     return int({{if not .GvaModel}}*{{- end }}s.{{.PrimaryField.FieldName}})
 }
 
-// GetParentID 实现TreeNode接口
 func (s *{{.StructName}}) GetParentID() int {
     return s.ParentID
+}
+
+func (s *{{.StructName}}) GetTreePath() string {
+    return s.TreePath
 }
 {{ end }}
 

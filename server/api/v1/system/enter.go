@@ -28,6 +28,9 @@ type ApiGroup struct {
 	ApiTokenApi
 	SkillsApi
 	AIWorkflowSessionApi
+	OperLogApi
+	DataPermissionApi
+	FieldPermissionApi
 }
 
 var (
@@ -40,6 +43,7 @@ var (
 	baseMenuService          = service.ServiceGroupApp.SystemServiceGroup.BaseMenuService
 	authorityService         = service.ServiceGroupApp.SystemServiceGroup.AuthorityService
 	dictionaryService        = service.ServiceGroupApp.SystemServiceGroup.DictionaryService
+	dictionaryCacheService   = service.ServiceGroupApp.SystemServiceGroup.DictionaryCacheService
 	authorityBtnService      = service.ServiceGroupApp.SystemServiceGroup.AuthorityBtnService
 	systemConfigService      = service.ServiceGroupApp.SystemServiceGroup.SystemConfigService
 	sysParamsService         = service.ServiceGroupApp.SystemServiceGroup.SysParamsService
@@ -56,4 +60,7 @@ var (
 	loginLogService          = service.ServiceGroupApp.SystemServiceGroup.LoginLogService
 	apiTokenService          = service.ServiceGroupApp.SystemServiceGroup.ApiTokenService
 	skillsService            = service.ServiceGroupApp.SystemServiceGroup.SkillsService
+	operLogService           = service.ServiceGroupApp.SystemServiceGroup.OperLogService
+	dataPermissionService    = service.ServiceGroupApp.SystemServiceGroup.DataPermissionService
+	fieldPermissionService   = service.ServiceGroupApp.SystemServiceGroup.FieldPermissionService
 )

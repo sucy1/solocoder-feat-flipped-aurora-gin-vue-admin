@@ -1,6 +1,8 @@
 package system
 
 import (
+	"net/http"
+
 	"github.com/flipped-aurora/gin-vue-admin/server/global"
 	"github.com/flipped-aurora/gin-vue-admin/server/model/common/response"
 	"github.com/flipped-aurora/gin-vue-admin/server/model/system"
@@ -102,7 +104,7 @@ func (s *DictionaryApi) FindSysDictionary(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	sysDictionary, err := dictionaryService.GetSysDictionary(dictionary.Type, dictionary.ID, dictionary.Status)
+	sysDictionary, err := dictionaryCacheService.GetCachedDictionary(dictionary.Type, dictionary.ID, dictionary.Status)
 	if err != nil {
 		global.GVA_LOG.Error("字典未创建或未开启!", zap.Error(err))
 		response.FailWithMessage("字典未创建或未开启", c)
@@ -188,4 +190,21 @@ func (s *DictionaryApi) ImportSysDictionary(c *gin.Context) {
 		return
 	}
 	response.OkWithMessage("导入成功", c)
+}
+
+func (s *DictionaryApi) RefreshCache(c *gin.Context) {
+	if dictionaryCacheService.IsRefreshing() {
+		c.JSON(http.StatusLocked, response.Response{
+			Code: 7,
+			Msg:  "缓存正在刷新中，请稍后再试",
+		})
+		return
+	}
+	err := dictionaryCacheService.RefreshCache()
+	if err != nil {
+		global.GVA_LOG.Error("刷新缓存失败!", zap.Error(err))
+		response.FailWithMessage("刷新缓存失败", c)
+		return
+	}
+	response.OkWithMessage("刷新缓存成功", c)
 }

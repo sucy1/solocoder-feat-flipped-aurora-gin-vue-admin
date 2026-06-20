@@ -11,6 +11,7 @@ type ServiceGroup struct {
 	BaseMenuService
 	AuthorityService
 	DictionaryService
+	DictionaryCacheService
 	SystemConfigService
 	OperationRecordService
 	DictionaryDetailService
@@ -27,4 +28,7 @@ type ServiceGroup struct {
 	SysErrorService
 	LoginLogService
 	ApiTokenService
+	OperLogService
+	DataPermissionService
+	FieldPermissionService
 }

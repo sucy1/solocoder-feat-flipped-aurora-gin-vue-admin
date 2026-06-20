@@ -44,6 +44,8 @@ import (
     {{- else }}
     "{{.Module}}/utils"
     "errors"
+    "strconv"
+    "strings"
     {{- end }}
     {{- if .AutoCreateResource }}
     "gorm.io/gorm"
@@ -57,7 +59,24 @@ type {{.StructName}}Service struct {}
 // Create{{.StructName}} 创建{{.Description}}记录
 // Author [yourname](https://github.com/yourname)
 func ({{.Abbreviation}}Service *{{.StructName}}Service) Create{{.StructName}}(ctx context.Context, {{.Abbreviation}} *{{.Package}}.{{.StructName}}) (err error) {
+	{{- if .IsTree }}
+	if {{.Abbreviation}}.ParentID != 0 {
+		var parent {{.Package}}.{{.StructName}}
+		if err = {{$db}}.Where("{{.PrimaryField.ColumnName}} = ?", {{.Abbreviation}}.ParentID).First(&parent).Error; err != nil {
+			return err
+		}
+		{{.Abbreviation}}.TreePath = parent.TreePath + "/" + strconv.Itoa({{.Abbreviation}}.ParentID)
+	} else {
+		{{.Abbreviation}}.TreePath = ""
+	}
+	{{- end }}
 	err = {{$db}}.Create({{.Abbreviation}}).Error
+	{{- if .IsTree }}
+	if err == nil {
+		{{.Abbreviation}}.TreePath = {{.Abbreviation}}.TreePath + "/" + strconv.Itoa(int({{if not .GvaModel}}{{.Abbreviation}}.{{.PrimaryField.FieldName}}{{else}}{{.Abbreviation}}.ID{{end}}))
+		{{$db}}.Model(&{{.Package}}.{{.StructName}}{}).Where("{{.PrimaryField.ColumnName}} = ?", {{if not .GvaModel}}{{.Abbreviation}}.{{.PrimaryField.FieldName}}{{else}}{{.Abbreviation}}.ID{{end}}).Update("tree_path", {{.Abbreviation}}.TreePath)
+	}
+	{{- end }}
 	return err
 }
 
@@ -66,12 +85,12 @@ func ({{.Abbreviation}}Service *{{.StructName}}Service) Create{{.StructName}}(ct
 func ({{.Abbreviation}}Service *{{.StructName}}Service)Delete{{.StructName}}(ctx context.Context, {{.PrimaryField.FieldJson}} string{{- if .AutoCreateResource -}},userID uint{{- end -}}) (err error) {
 	{{- if .IsTree }}
        var count int64
-	   err = {{$db}}.Find(&{{.Package}}.{{.StructName}}{},"parent_id = ?",{{.PrimaryField.FieldJson}}).Count(&count).Error
-	   if count > 0 {
-           return errors.New("此节点存在子节点不允许删除")
-       }
-       if err != nil {
+	   err = {{$db}}.Model(&{{.Package}}.{{.StructName}}{}).Where("parent_id = ?",{{.PrimaryField.FieldJson}}).Count(&count).Error
+	   if err != nil {
            return err
+       }
+       if count > 0 {
+           return errors.New("此节点存在子节点不允许删除")
        }
 	{{- end }}
 
@@ -113,6 +132,32 @@ func ({{.Abbreviation}}Service *{{.StructName}}Service)Delete{{.StructName}}ById
 // Update{{.StructName}} 更新{{.Description}}记录
 // Author [yourname](https://github.com/yourname)
 func ({{.Abbreviation}}Service *{{.StructName}}Service)Update{{.StructName}}(ctx context.Context, {{.Abbreviation}} {{.Package}}.{{.StructName}}) (err error) {
+	{{- if .IsTree }}
+	var old {{.Package}}.{{.StructName}}
+	if err = {{$db}}.Where("{{.PrimaryField.ColumnName}} = ?", {{.Abbreviation}}.{{.PrimaryField.FieldName}}).First(&old).Error; err != nil {
+		return err
+	}
+	if old.ParentID != {{.Abbreviation}}.ParentID {
+		if {{.Abbreviation}}.ParentID != 0 {
+			var parent {{.Package}}.{{.StructName}}
+			if err = {{$db}}.Where("{{.PrimaryField.ColumnName}} = ?", {{.Abbreviation}}.ParentID).First(&parent).Error; err != nil {
+				return err
+			}
+			{{.Abbreviation}}.TreePath = parent.TreePath + "/" + strconv.Itoa({{.Abbreviation}}.ParentID)
+		} else {
+			{{.Abbreviation}}.TreePath = ""
+		}
+		{{.Abbreviation}}.TreePath = {{.Abbreviation}}.TreePath + "/" + strconv.Itoa(int({{if not .GvaModel}}{{.Abbreviation}}.{{.PrimaryField.FieldName}}{{else}}{{.Abbreviation}}.ID{{end}}))
+		var children []{{.Package}}.{{.StructName}}
+		if err = {{$db}}.Where("tree_path LIKE ?", old.TreePath+"/%").Find(&children).Error; err != nil {
+			return err
+		}
+		for i := range children {
+			newPath := {{.Abbreviation}}.TreePath + strings.TrimPrefix(children[i].TreePath, old.TreePath)
+			{{$db}}.Model(&{{.Package}}.{{.StructName}}{}).Where("{{.PrimaryField.ColumnName}} = ?", {{if not .GvaModel}}children[i].{{.PrimaryField.FieldName}}{{else}}children[i].ID{{end}}).Update("tree_path", newPath)
+		}
+	}
+	{{- end }}
 	err = {{$db}}.Model(&{{.Package}}.{{.StructName}}{}).Where("{{.PrimaryField.ColumnName}} = ?",{{.Abbreviation}}.{{.PrimaryField.FieldName}}).Updates(&{{.Abbreviation}}).Error
 	return err
 }
